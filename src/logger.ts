@@ -35,6 +35,10 @@ export function broadcast(level: LogEntry['level'], source: string, message: str
   }
 }
 
+export function getLogs(): LogEntry[] {
+  return [...logBuffer];
+}
+
 export function attachLogServer(server: http.Server): void {
   const wss = new WebSocketServer({ server, path: '/ws/logs' });
   wss.on('connection', (ws: WebSocket) => {

@@ -8,7 +8,7 @@ import { scrapeProduct, scrapeCategory } from './services/scrape.do.service';
 import { scrapeBulk, closeBrowser } from './services/playwright.service';
 import { SiteKey } from './config/sites';
 import { runFullPipeline } from './cron/cron-runner';
-import { attachLogServer, interceptConsole } from './logger';
+import { attachLogServer, interceptConsole, getLogs } from './logger';
 
 const LOCK_FILE = path.join(process.cwd(), 'output', 'cron.lock');
 const STOP_FILE = path.join(process.cwd(), 'output', 'stop.signal');
@@ -154,6 +154,10 @@ app.post('/api/trigger', (_req, res) => {
   }
   res.json({ triggered: true });
   runFullPipeline().catch(e => console.error('[trigger] Pipeline failed:', e.message));
+});
+
+app.get('/api/logs', (_req, res) => {
+  res.json({ logs: getLogs() });
 });
 
 app.post('/api/stop', (_req, res) => {
