@@ -92,6 +92,8 @@ async function scrapeProductWithRetry(url: string): Promise<ProductData> {
       return data;
     } catch (e: any) {
       lastErr = e;
+      const noRetry = /no_peer|probe_timeout|a2a_tun_open|a2a_exception|ERR_TUNNEL_CONNECTION_FAILED|Timeout \d+ms exceeded/i.test(e.message);
+      if (noRetry) break;
       if (attempt < 2) {
         const delay = 3000 * Math.pow(2, attempt);
         console.warn(`[retry ${attempt + 1}] ${url}: ${e.message} (waiting ${delay}ms)`);
