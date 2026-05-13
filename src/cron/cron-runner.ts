@@ -64,6 +64,7 @@ async function reportStatus(success: boolean, productCount: number, errorCount: 
       source: 'cron',
       success,
       responseTime: responseTimeMs,
+      productCount,
       ...(error ? { error } : {}),
     }, { timeout: 10000 });
     console.log(`[cron] Status reported to peppy-be (success=${success}, products=${productCount})`);

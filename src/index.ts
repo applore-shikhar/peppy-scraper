@@ -1,10 +1,14 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
+import * as fs from 'fs';
+import * as path from 'path';
 import { scrapeProduct, scrapeCategory } from './services/scrape.do.service';
 import { scrapeBulk, closeBrowser } from './services/playwright.service';
 import { SiteKey } from './config/sites';
 import { runFullPipeline } from './cron/cron-runner';
+
+const LOCK_FILE = path.join(process.cwd(), 'output', 'cron.lock');
 
 dotenv.config();
 
@@ -119,6 +123,33 @@ app.post('/scrape-bulk', async (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// ─── Manual trigger + status ──────────────────────────────────────────────────
+
+app.get('/api/status', (_req, res) => {
+  if (fs.existsSync(LOCK_FILE)) {
+    try {
+      const lock = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
+      return res.json({ running: true, startedAt: lock.startedAt, pid: lock.pid });
+    } catch {
+      return res.json({ running: true });
+    }
+  }
+  res.json({ running: false });
+});
+
+app.post('/api/trigger', (_req, res) => {
+  if (fs.existsSync(LOCK_FILE)) {
+    try {
+      const lock = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
+      return res.json({ triggered: false, reason: 'Pipeline already running', startedAt: lock.startedAt });
+    } catch {
+      return res.json({ triggered: false, reason: 'Pipeline already running' });
+    }
+  }
+  res.json({ triggered: true });
+  runFullPipeline().catch(e => console.error('[trigger] Pipeline failed:', e.message));
 });
 
 // ─── Cron schedule ────────────────────────────────────────────────────────────
