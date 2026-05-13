@@ -170,8 +170,8 @@ async function withRetry<T>(
       return await fn();
     } catch (e: any) {
       lastErr = e;
-      // Bright Data routing failures — no peer nodes available, retrying won't help
-      const isRoutingErr = /no_peer|probe_timeout|a2a_tun_open|a2a_exception/i.test(e.message);
+      // Bright Data routing/tunnel failures — retrying won't help
+      const isRoutingErr = /no_peer|probe_timeout|a2a_tun_open|a2a_exception|ERR_TUNNEL_CONNECTION_FAILED/i.test(e.message);
       if (isRoutingErr) {
         throw e;
       }

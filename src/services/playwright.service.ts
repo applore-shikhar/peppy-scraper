@@ -177,9 +177,16 @@ async function scrapeOneSite(opts: ScrapeOneSiteOptions): Promise<void> {
           break;
         }
 
+        const prevSize = collectedLinks.size;
         for (const link of newLinks) {
           if (collectedLinks.size >= count) break;
           collectedLinks.add(link);
+        }
+
+        // All returned links were already collected — pagination exhausted
+        if (collectedLinks.size === prevSize) {
+          console.log(`[${site}] Page ${pageNum} returned only duplicates — stopping pagination.`);
+          break;
         }
 
         pageNum++;
