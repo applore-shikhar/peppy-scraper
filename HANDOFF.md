@@ -1,0 +1,165 @@
+# Peppy Scraper Service — Handoff Document
+**Last updated:** 2026-05-13  
+**Repo:** https://github.com/applore-shikhar/peppy-scraper.git
+
+---
+
+## What Was Built
+
+### 8-Site Scraper
+Full scraping pipeline across 8 UAE e-commerce sites:
+
+| Site | Method | Parser |
+|------|--------|--------|
+| Amazon | Bright Data Unlocker (HTTP) | `amazon.parser.ts` |
+| Noon | Bright Data Browser (CDP) | `noon.parser.ts` |
+| Carrefour | Bright Data Browser + Sitemap | `carrefour.parser.ts` |
+| SharafDG | Bright Data Browser (CDP) | `sharafdg.parser.ts` |
+| Jumbo | Bright Data Browser (CDP) | `jumbo.parser.ts` |
+| Mumzworld | Bright Data Unlocker (HTTP) | `mumzworld.parser.ts` |
+| Namshi | Bright Data Browser (CDP) | `namshi.parser.ts` |
+| Letstango | Shopify `/products.json` (axios) | `shopify.service.ts` |
+
+### Category-Level Scraping (Option 1)
+Sites scrape actual category browse pages — not product-specific search terms.
+
+- **Jumbo** — `/mobile-phones.html`, `/personal-computers/laptops.html`, `/television-home-theaters.html`, etc. Pagination: `?pageNo=N`
+- **SharafDG** — Algolia `/c/{taxonomy}/` URLs: `/c/mobiles_tablets/mobiles/`, `/c/computing/laptops/`, `/c/tv_video_audio/tvs/`, etc. Pagination: `?page=N`
+- **Mumzworld** — `/en/baby-gear/strollers`, `/en/toys-games`, etc. Pagination: `?p=N`
+- **Namshi** — `/uae-en/women/`, `/uae-en/men/`, `/uae-en/women/abayas/`, etc. Pagination: `?page=N`
+- **Amazon/Noon/Carrefour** — search-based (already broad enough)
+- **Letstango** — Shopify category filter via `collectShopifyProducts`
+
+### Data Pipeline
+```
+Category page → link collection → per-product scrape (3 retries, no-image = skip)
+→ bundler (Jaccard similarity 0.45 dedupe across sites)
+→ vector tagger (OpenAI text-embedding-3-small)
+→ ChromaDB upsert
+→ MongoDB products_clean (flush + reinsert on full run)
+```
+
+### Key Design Decisions
+- **Multi-image**: each parser collects all image angles; bundler picks retailer with MOST images (no cross-retailer merging)
+- **No-image rejection**: products with zero images are retried 3× then moved to `checkpoint.failed` — never pushed to DB
+- **Checkpoint system**: each scrape job is resumable via `output/checkpoints/{jobId}.json`
+- **Taxonomy**: `broadCategory` + `subCategory` stamped on each product at scrape time; `inferTaxonomy()` as fallback regex
+
+### Cron Job
+- File: `src/cron/cron-runner.ts`
+- Registered in `src/index.ts` on startup when `ENABLE_CRON=true`
+- Loops all `QUERIES` from `scrape-master.ts` sequentially with 15s cooldown between queries
+- After all queries: calls `pushToDatabase()` → flushes and reinserts `products_clean`
+- Posts status to `PEPPY_BE_URL/api/admin/scraper/status` on completion
+- Lock file: `output/cron.lock` prevents overlapping runs
+
+### Environment Variables (production server)
+```env
+ENABLE_CRON=true
+SCRAPE_CRON=30 17 * * *    # 11pm IST = 17:30 UTC
+MONGODB_URI=...
+OPENAI_API_KEY=...
+BRIGHTDATA_...=...
+PEPPY_BE_URL=https://api.peppy.ae
+CHROMA_URL=...             # optional
+```
+
+### Scripts
+| Script | Purpose |
+|--------|---------|
+| `pnpm start` | Start HTTP server + register cron |
+| `npx ts-node scrape-master.ts` | Manual full scrape (all queries) |
+| `npx ts-node scrape-category-test.ts` | Test category scraping across all 8 sites (10 products each) |
+| `npx ts-node scrape-test.ts` | Smoke test all sites (10 products each) |
+| `npx ts-node push-to-mongodb.ts <file.json>` | Manual push JSON output to MongoDB |
+| `npx ts-node add-to-mongodb.ts <file.json>` | Upsert without flushing collection |
+
+### Deployment
+- **Repo:** https://github.com/applore-shikhar/peppy-scraper.git
+- **NOT for Netlify** (no persistent process)
+- **Recommended:** DigitalOcean $6/mo droplet (1GB RAM), Railway $5/mo, or Render paid ($7/mo background worker)
+- **Render free tier**: cron unreliable (spins down after 15min inactivity), 512MB RAM (OOM risk on full run)
+
+---
+
+## Admin Panel Integration — Next Task
+
+**Goal:** Add a "Scraper Control" section to the admin panel that lets admins manually trigger the cron pipeline and view its status — without SSH access to the server.
+
+### Admin Panel Tech Stack
+- React + Vite + shadcn/ui
+- Services in `src/services/` call peppy-be API via `src/services/api.js`
+- Existing relevant pages:
+  - `src/pages/system/SystemStatus.jsx` — shows scraper health from `/admin/scraper/health`
+  - `src/pages/system/ErrorLogs.jsx` — shows scraper logs from `/admin/system/logs`
+  - `src/services/system.service.js` — calls `/admin/scraper/health`, `/admin/scraper/success-rates`
+
+### What Needs to Be Built
+
+#### 1. Admin Panel — New Page: `ScraperControl.jsx`
+Located at `src/pages/system/ScraperControl.jsx`. Should show:
+- **Cron status**: last run time, next scheduled run, success/failure, product count inserted
+- **Manual trigger button**: "Run Now" → POST to scraper service trigger endpoint
+- **Live log stream** (optional): poll for status every 10s while running
+- **Query list**: show which categories are configured (read from backend or hardcoded)
+
+#### 2. peppy-be — New Endpoints Needed
+The scraper service already POSTs status to peppy-be on completion. peppy-be needs:
+```
+GET  /api/admin/scraper/status        → last run status, productCount, errorCount, duration
+GET  /api/admin/scraper/health        → already exists (used by SystemStatus.jsx)
+POST /api/admin/scraper/trigger       → forward trigger to scraper service HTTP endpoint
+```
+
+#### 3. Scraper Service — Trigger Endpoint
+`src/index.ts` needs a POST route that manually kicks off `runFullPipeline()`:
+```
+POST /api/trigger   → calls runFullPipeline() (checks lock file, skips if already running)
+```
+This already partially exists — confirm in `src/index.ts`.
+
+### Assessment Tasks for Next Session
+1. Read `src/index.ts` in scraper service — confirm what HTTP routes exist
+2. Read peppy-be scraper controller — find what `/admin/scraper/*` endpoints are implemented
+3. Read `SystemStatus.jsx` fully — understand existing UI patterns to match style
+4. Decide: does peppy-be proxy the trigger to scraper service, or does admin panel call scraper service directly?
+5. Build `ScraperControl.jsx` + wire to backend
+
+---
+
+## File Map (key files only)
+
+```
+New Scraper Service/
+├── src/
+│   ├── config/
+│   │   └── sites.ts              ← SiteKey enum, category browse URLs per site
+│   ├── cron/
+│   │   ├── cron-runner.ts        ← runFullPipeline(), lock file, status POST
+│   │   └── push-pipeline.ts      ← pushToDatabase(), loadBundlesFromJson()
+│   ├── parsers/
+│   │   ├── *.parser.ts           ← one per site
+│   │   └── search/*.search.parser.ts  ← extract product links from listing pages
+│   ├── services/
+│   │   ├── playwright.service.ts ← scrapeBulk(), scrapeOneSite(), categoryKey routing
+│   │   ├── brightdata.service.ts ← fetchHTMLViaUnlocker, fetchHTMLViaBrowser, scrapeProductBD
+│   │   ├── bundler.service.ts    ← Jaccard dedup, image strategy, vector tagging
+│   │   ├── shopify.service.ts    ← Letstango /products.json
+│   │   ├── checkpoint.service.ts ← resumable job state
+│   │   ├── vector-tagger.service.ts ← OpenAI embeddings + ChromaDB
+│   │   └── chroma.service.ts     ← ChromaDB client
+│   └── index.ts                  ← Express server + cron registration
+├── scrape-master.ts              ← QUERIES array (all 80+ category queries)
+├── scrape-category-test.ts       ← 6-query category browse test
+└── scrape-test.ts                ← 3-query smoke test
+
+Admin Panel/
+├── src/
+│   ├── pages/system/
+│   │   ├── SystemStatus.jsx      ← existing scraper health UI (extend this or add new page)
+│   │   └── ErrorLogs.jsx
+│   ├── services/
+│   │   ├── system.service.js     ← calls /admin/scraper/health, /admin/system/logs
+│   │   └── api.js                ← axios base instance
+│   └── App.jsx                   ← add route for ScraperControl
+```
