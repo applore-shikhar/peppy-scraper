@@ -10,6 +10,8 @@ const LOCK_FILE = path.join(process.cwd(), 'output', 'cron.lock');
 const STATE_FILE = path.join(process.cwd(), 'output', 'cron_state.json');
 const STOP_FILE = path.join(process.cwd(), 'output', 'stop.signal');
 
+const PARALLEL_QUERIES = Math.max(1, parseInt(process.env.PARALLEL_QUERIES || '3', 10));
+
 function shouldStop(): boolean {
   return fs.existsSync(STOP_FILE);
 }
@@ -101,47 +103,52 @@ export async function runFullPipeline(): Promise<void> {
   let fatalError: string | undefined;
 
   try {
-    for (let i = 0; i < QUERIES.length; i++) {
-      const query = QUERIES[i];
+    const pending = QUERIES.filter(q => !state.completedQueries.includes(q.category));
+    console.log(`[cron] ${pending.length} queries to run (${PARALLEL_QUERIES} parallel)\n`);
 
+    for (let i = 0; i < pending.length; i += PARALLEL_QUERIES) {
       if (shouldStop()) {
         clearStopSignal();
         console.log('[cron] ⛔ Stop signal received — aborting pipeline.');
         break;
       }
 
-      if (state.completedQueries.includes(query.category)) {
-        console.log(`[cron] Skipping "${query.label}" — already done.`);
-        continue;
-      }
+      const batch = pending.slice(i, i + PARALLEL_QUERIES);
+      const batchNum = Math.floor(i / PARALLEL_QUERIES) + 1;
+      const totalBatches = Math.ceil(pending.length / PARALLEL_QUERIES);
+      console.log(`\n[cron] ── Batch ${batchNum}/${totalBatches}: ${batch.map(q => q.label).join(' | ')} ──`);
 
-      console.log(`\n[cron] ── Query ${i + 1}/${QUERIES.length}: ${query.label} ──`);
-
-      if (i > 0 && !state.completedQueries.includes(QUERIES[i - 1]?.category ?? '')) {
-        const cooldown = 15000;
-        console.log(`[cron] Cooling down ${cooldown / 1000}s...`);
-        await new Promise(r => setTimeout(r, cooldown));
-      }
-
-      try {
-        const result = await scrapeBulk({
+      const outcomes = await Promise.allSettled(
+        batch.map(query => scrapeBulk({
           sites: query.sites,
           category: query.category,
           broadCategory: query.broadCategory,
           subCategory: query.subCategory,
           count: query.count,
-        });
+        }))
+      );
 
-        state.allBundles.push(...result.bundles);
-        state.totalRawScraped += result.totalScraped;
-        state.totalErrors += result.errors.length;
-        state.completedQueries.push(query.category);
-        saveCronState(state);
-        console.log(`[cron] "${query.label}" done — ${result.bundleCount} bundles.`);
-      } catch (e: any) {
-        console.error(`[cron] "${query.label}" FAILED: ${e.message}`);
-        state.totalErrors++;
-        saveCronState(state);
+      for (let j = 0; j < batch.length; j++) {
+        const query = batch[j];
+        const outcome = outcomes[j];
+        if (outcome.status === 'fulfilled') {
+          const result = outcome.value;
+          state.allBundles.push(...result.bundles);
+          state.totalRawScraped += result.totalScraped;
+          state.totalErrors += result.errors.length;
+          state.completedQueries.push(query.category);
+          console.log(`[cron] "${query.label}" done — ${result.bundleCount} bundles.`);
+        } else {
+          console.error(`[cron] "${query.label}" FAILED: ${outcome.reason?.message}`);
+          state.totalErrors++;
+        }
+      }
+      saveCronState(state);
+
+      if (i + PARALLEL_QUERIES < pending.length && !shouldStop()) {
+        const cooldown = 15000;
+        console.log(`[cron] Cooling down ${cooldown / 1000}s before next batch...`);
+        await new Promise(r => setTimeout(r, cooldown));
       }
     }
 

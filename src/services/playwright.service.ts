@@ -300,9 +300,9 @@ export async function scrapeBulk(options: {
     console.log(`[job] Starting ${jobId} — ${sites.join(', ')} × ${count} products [${broadCategory} > ${subCategory}].`);
   }
 
-  for (const site of sites) {
-    try {
-      await scrapeOneSite({
+  await Promise.allSettled(
+    sites.map(site =>
+      scrapeOneSite({
         site,
         category,
         categoryKey: checkpoint.categoryKey,
@@ -310,11 +310,9 @@ export async function scrapeBulk(options: {
         subCategory: checkpoint.subCategory,
         count,
         checkpoint,
-      });
-    } catch (e: any) {
-      console.error(`[${site}] Site-level error — skipping: ${e.message}`);
-    }
-  }
+      }).catch((e: any) => console.error(`[${site}] Site-level error — skipping: ${e.message}`))
+    )
+  );
 
   const allProducts = checkpoint.scraped.map(s => ({ site: s.site, data: s.data }));
   const bundles = await bundleProducts(allProducts, category, checkpoint.broadCategory, checkpoint.subCategory);
