@@ -170,6 +170,11 @@ async function withRetry<T>(
       return await fn();
     } catch (e: any) {
       lastErr = e;
+      // Bright Data routing failures — no peer nodes available, retrying won't help
+      const isRoutingErr = /no_peer|probe_timeout|a2a_tun_open|a2a_exception/i.test(e.message);
+      if (isRoutingErr) {
+        throw e;
+      }
       const isConnErr = /ENOTFOUND|ECONNRESET|ECONNREFUSED|WebSocket|disconnected|domain limit/i.test(e.message);
       if (isConnErr) {
         _browser = null;
@@ -259,10 +264,23 @@ export async function scrapeProductBD(url: string): Promise<ProductData> {
       return parseMumzworld(html, url);
     }
 
+    // SharafDG: try Unlocker first (server-renders key fields), browser as fallback
+    if (hostname.includes('sharafdg.com')) {
+      try {
+        const html = await fetchHTMLViaUnlocker(url);
+        const product = parseSharafDG(html, url);
+        if (product.price !== null) return product;
+        throw new Error('Unlocker: price missing — falling back to browser');
+      } catch (unlockerErr: any) {
+        console.warn(`[sharafdg] Unlocker failed (${unlockerErr.message}) — trying browser`);
+        const html = await fetchHTMLViaBrowser(url, waitSel, 10000);
+        return parseSharafDG(html, url);
+      }
+    }
+
     const html = await fetchHTMLViaBrowser(url, waitSel, 10000);
 
     if (hostname.includes('noon.com')) return parseNoon(html, url);
-    if (hostname.includes('sharafdg.com')) return parseSharafDG(html, url);
     if (hostname.includes('jumbo.ae')) return parseJumbo(html, url);
     if (hostname.includes('namshi.com')) return parseNamshi(html, url);
 
