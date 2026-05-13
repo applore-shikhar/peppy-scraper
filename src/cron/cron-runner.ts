@@ -8,6 +8,15 @@ import { BundledProduct } from '../parsers/types';
 
 const LOCK_FILE = path.join(process.cwd(), 'output', 'cron.lock');
 const STATE_FILE = path.join(process.cwd(), 'output', 'cron_state.json');
+const STOP_FILE = path.join(process.cwd(), 'output', 'stop.signal');
+
+function shouldStop(): boolean {
+  return fs.existsSync(STOP_FILE);
+}
+
+function clearStopSignal(): void {
+  try { fs.unlinkSync(STOP_FILE); } catch {}
+}
 
 interface CronState {
   startedAt: string;
@@ -94,6 +103,12 @@ export async function runFullPipeline(): Promise<void> {
   try {
     for (let i = 0; i < QUERIES.length; i++) {
       const query = QUERIES[i];
+
+      if (shouldStop()) {
+        clearStopSignal();
+        console.log('[cron] ⛔ Stop signal received — aborting pipeline.');
+        break;
+      }
 
       if (state.completedQueries.includes(query.category)) {
         console.log(`[cron] Skipping "${query.label}" — already done.`);

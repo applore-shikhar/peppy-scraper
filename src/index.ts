@@ -1,4 +1,5 @@
 import express from 'express';
+import * as http from 'http';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
 import * as fs from 'fs';
@@ -7,10 +8,13 @@ import { scrapeProduct, scrapeCategory } from './services/scrape.do.service';
 import { scrapeBulk, closeBrowser } from './services/playwright.service';
 import { SiteKey } from './config/sites';
 import { runFullPipeline } from './cron/cron-runner';
+import { attachLogServer, interceptConsole } from './logger';
 
 const LOCK_FILE = path.join(process.cwd(), 'output', 'cron.lock');
+const STOP_FILE = path.join(process.cwd(), 'output', 'stop.signal');
 
 dotenv.config();
+interceptConsole();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -152,6 +156,20 @@ app.post('/api/trigger', (_req, res) => {
   runFullPipeline().catch(e => console.error('[trigger] Pipeline failed:', e.message));
 });
 
+app.post('/api/stop', (_req, res) => {
+  if (!fs.existsSync(LOCK_FILE)) {
+    return res.json({ stopped: false, reason: 'Pipeline not running' });
+  }
+  try {
+    fs.mkdirSync(path.dirname(STOP_FILE), { recursive: true });
+    fs.writeFileSync(STOP_FILE, JSON.stringify({ requestedAt: new Date().toISOString() }));
+    console.log('[stop] Stop signal written — pipeline will abort at next checkpoint.');
+    res.json({ stopped: true });
+  } catch (e: any) {
+    res.status(500).json({ stopped: false, reason: e.message });
+  }
+});
+
 // ─── Cron schedule ────────────────────────────────────────────────────────────
 if (process.env.ENABLE_CRON === 'true') {
   const schedule = process.env.SCRAPE_CRON || '0 2 * * *';
@@ -166,8 +184,12 @@ if (process.env.ENABLE_CRON === 'true') {
   }
 }
 
-const server = app.listen(PORT, () => {
+const server = http.createServer(app);
+attachLogServer(server);
+
+server.listen(PORT, () => {
   console.log(`Scraper service running on http://localhost:${PORT}`);
+  console.log(`WebSocket logs:     WS   ws://localhost:${PORT}/ws/logs`);
   console.log(`Product endpoint:   GET  http://localhost:${PORT}/scrape?url=<product_url>`);
   console.log(`Category endpoint:  GET  http://localhost:${PORT}/scrape-category?url=<category_url>&limit=3`);
   console.log(`Bulk endpoint:      POST http://localhost:${PORT}/scrape-bulk`);
