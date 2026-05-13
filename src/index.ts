@@ -12,7 +12,11 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(express.json());
+app.get('/', async (req, res) => {
 
+    res.json({status:"peppy cron is running"});
+ 
+});
 app.get('/scrape', async (req, res) => {
   const { url } = req.query;
 
