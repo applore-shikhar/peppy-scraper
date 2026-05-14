@@ -36,7 +36,7 @@ async function main() {
   const result = await pushToDatabase(bundles);
 
   console.log(`\n[push] Done!`);
-  console.log(`  MongoDB products_clean : ${result.mongoInserted} products`);
+  console.log(`  MongoDB products_clean : ${result.mongoInserted} new, ${result.mongoUpdated} updated`);
   console.log(`  ChromaDB peppy_products: ${result.chromaVectors} vectors`);
   if (result.errors.length > 0) {
     console.warn(`  Errors: ${result.errors.join('; ')}`);

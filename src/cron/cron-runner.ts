@@ -154,7 +154,7 @@ export async function runFullPipeline(): Promise<void> {
 
     console.log(`\n[cron] All queries done. Pushing ${state.allBundles.length} bundles to DB...`);
     const pushResult = await pushToDatabase(state.allBundles);
-    console.log(`[cron] Push complete — MongoDB: ${pushResult.mongoInserted}, ChromaDB: ${pushResult.chromaVectors}`);
+    console.log(`[cron] Push complete — MongoDB: ${pushResult.mongoInserted} new, ${pushResult.mongoUpdated} updated | ChromaDB: ${pushResult.chromaVectors}`);
     if (pushResult.errors.length > 0) {
       console.warn(`[cron] Push errors: ${pushResult.errors.join('; ')}`);
     }
@@ -168,7 +168,7 @@ export async function runFullPipeline(): Promise<void> {
     console.log(`[cron] Bundles: ${state.allBundles.length} | Raw: ${state.totalRawScraped} | Errors: ${state.totalErrors}`);
     console.log(`[cron] ══════════════════════════════════════════════════\n`);
 
-    await reportStatus(true, pushResult.mongoInserted, state.totalErrors, elapsed);
+    await reportStatus(true, pushResult.mongoInserted + pushResult.mongoUpdated, state.totalErrors, elapsed);
   } catch (e: any) {
     fatalError = e.message;
     console.error(`[cron] Pipeline fatal error: ${e.message}`);

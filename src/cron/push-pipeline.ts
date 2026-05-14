@@ -120,6 +120,7 @@ function toMongoProduct(bundle: BundledProduct) {
 
 export interface PushResult {
   mongoInserted: number;
+  mongoUpdated: number;
   chromaVectors: number;
   errors: string[];
 }
@@ -129,7 +130,7 @@ export async function pushToDatabase(
 ): Promise<PushResult> {
   const errors: string[] = [];
 
-  const products = bundles.map(toMongoProduct).filter(Boolean);
+  const products = bundles.map(toMongoProduct).filter(Boolean) as ReturnType<typeof toMongoProduct>[];
   console.log(`[push] ${bundles.length} bundles → ${products.length} valid products`);
 
   const MONGODB_URI = process.env.MONGODB_URI;
@@ -140,18 +141,29 @@ export async function pushToDatabase(
   const db = client.db('peppy');
   const col = db.collection('products_clean');
 
-  const existing = await col.countDocuments();
-  console.log(`[push] Flushing products_clean (${existing} docs)...`);
-  await col.deleteMany({});
+  const now = new Date();
+  const ops = products.map(p => ({
+    updateOne: {
+      filter: { name: p!.name },
+      update: {
+        $set: { ...p, updatedAt: now },
+        $setOnInsert: { createdAt: now },
+      },
+      upsert: true,
+    },
+  }));
 
-  const insertResult = await col.insertMany(products as any[]);
-  console.log(`[push] Inserted ${insertResult.insertedCount} products`);
+  const bulkResult = await col.bulkWrite(ops as any[], { ordered: false });
+  const mongoInserted = bulkResult.upsertedCount;
+  const mongoUpdated = bulkResult.modifiedCount;
+  console.log(`[push] Upserted: ${mongoInserted} new, ${mongoUpdated} updated`);
 
   await col.createIndex({ name: 'text', description: 'text', brand: 'text' }, { background: true });
   await col.createIndex({ category: 1, lowestPrice: 1 }, { background: true });
   await col.createIndex({ isTrending: 1 }, { background: true });
   await col.createIndex({ isTopRated: 1 }, { background: true });
   await col.createIndex({ tags: 1 }, { background: true });
+  await col.createIndex({ name: 1 }, { unique: true, background: true });
 
   await client.close();
 
@@ -159,11 +171,11 @@ export async function pushToDatabase(
 
   if (!isEmbeddingAvailable()) {
     console.warn('[push] OPENAI_API_KEY not set — skipping ChromaDB');
-    return { mongoInserted: insertResult.insertedCount, chromaVectors, errors };
+    return { mongoInserted, mongoUpdated, chromaVectors, errors };
   }
   if (!isChromaAvailable()) {
     console.warn('[push] ChromaDB not configured — skipping');
-    return { mongoInserted: insertResult.insertedCount, chromaVectors, errors };
+    return { mongoInserted, mongoUpdated, chromaVectors, errors };
   }
 
   try {
@@ -202,7 +214,7 @@ export async function pushToDatabase(
     errors.push(msg);
   }
 
-  return { mongoInserted: insertResult.insertedCount, chromaVectors, errors };
+  return { mongoInserted, mongoUpdated, chromaVectors, errors };
 }
 
 // ── Load bundles from JSON file ───────────────────────────────────────────────
