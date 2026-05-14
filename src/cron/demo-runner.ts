@@ -11,7 +11,7 @@ async function reportStatus(success: boolean, productCount: number, errorCount: 
   const beUrl = process.env.PEPPY_BE_URL;
   if (!beUrl) return;
   try {
-    await axios.post(`${beUrl}/api/admin/scraper/status`, {
+    await axios.post(`${beUrl}/api/v1/admin/scraper/status`, {
       source: 'cron',
       success,
       responseTime: responseTimeMs,
