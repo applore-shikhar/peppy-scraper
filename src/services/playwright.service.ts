@@ -20,6 +20,7 @@ import {
 import { initVectorTagger } from './vector-tagger.service';
 import { connectChroma, isChromaAvailable } from './chroma.service';
 import { collectShopifyProducts } from './shopify.service';
+import { shouldStop } from '../utils/stop-signal';
 
 export { closeBrowserPool as closeBrowser };
 
@@ -221,6 +222,10 @@ async function scrapeOneSite(opts: ScrapeOneSiteOptions): Promise<void> {
   console.log(`[${site}] Scraping ${remaining.length} remaining (${alreadyDone.size} already done)...`);
 
   for (const link of remaining) {
+    if (shouldStop()) {
+      console.log(`[${site}] Stop signal — aborting.`);
+      break;
+    }
     try {
       const data = await scrapeProductWithRetry(link);
       // Stamp taxonomy on each product

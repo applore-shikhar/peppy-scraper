@@ -8,10 +8,9 @@ import { scrapeProduct, scrapeCategory } from './services/scrape.do.service';
 import { scrapeBulk, closeBrowser } from './services/playwright.service';
 import { SiteKey } from './config/sites';
 import { runFullPipeline } from './cron/cron-runner';
+import { runDemoPipeline } from './cron/demo-runner';
 import { attachLogServer, interceptConsole, getLogs } from './logger';
-
-const LOCK_FILE = path.join(process.cwd(), 'output', 'cron.lock');
-const STOP_FILE = path.join(process.cwd(), 'output', 'stop.signal');
+import { LOCK_FILE, STOP_FILE, readLock } from './utils/stop-signal';
 
 dotenv.config();
 interceptConsole();
@@ -132,28 +131,29 @@ app.post('/scrape-bulk', async (req, res) => {
 // ─── Manual trigger + status ──────────────────────────────────────────────────
 
 app.get('/api/status', (_req, res) => {
-  if (fs.existsSync(LOCK_FILE)) {
-    try {
-      const lock = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
-      return res.json({ running: true, startedAt: lock.startedAt, pid: lock.pid });
-    } catch {
-      return res.json({ running: true });
-    }
+  const lock = readLock();
+  if (lock) {
+    return res.json({ running: true, startedAt: lock.startedAt, pid: lock.pid, mode: lock.mode || 'full' });
   }
   res.json({ running: false });
 });
 
 app.post('/api/trigger', (_req, res) => {
-  if (fs.existsSync(LOCK_FILE)) {
-    try {
-      const lock = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
-      return res.json({ triggered: false, reason: 'Pipeline already running', startedAt: lock.startedAt });
-    } catch {
-      return res.json({ triggered: false, reason: 'Pipeline already running' });
-    }
+  const lock = readLock();
+  if (lock) {
+    return res.json({ triggered: false, reason: 'Pipeline already running', startedAt: lock.startedAt, mode: lock.mode || 'full' });
   }
   res.json({ triggered: true });
   runFullPipeline().catch(e => console.error('[trigger] Pipeline failed:', e.message));
+});
+
+app.post('/api/demo', (_req, res) => {
+  const lock = readLock();
+  if (lock) {
+    return res.json({ triggered: false, reason: 'Pipeline already running', startedAt: lock.startedAt, mode: lock.mode || 'full' });
+  }
+  res.json({ triggered: true });
+  runDemoPipeline().catch(e => console.error('[demo] Pipeline failed:', e.message));
 });
 
 app.get('/api/logs', (_req, res) => {

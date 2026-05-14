@@ -5,20 +5,11 @@ import { scrapeBulk, closeBrowser } from '../services/playwright.service';
 import { pushToDatabase } from './push-pipeline';
 import { QUERIES } from '../../scrape-master';
 import { BundledProduct } from '../parsers/types';
+import { acquireLock, releaseLock, shouldStop, clearStopSignal } from '../utils/stop-signal';
 
-const LOCK_FILE = path.join(process.cwd(), 'output', 'cron.lock');
 const STATE_FILE = path.join(process.cwd(), 'output', 'cron_state.json');
-const STOP_FILE = path.join(process.cwd(), 'output', 'stop.signal');
 
 const PARALLEL_QUERIES = Math.max(1, parseInt(process.env.PARALLEL_QUERIES || '3', 10));
-
-function shouldStop(): boolean {
-  return fs.existsSync(STOP_FILE);
-}
-
-function clearStopSignal(): void {
-  try { fs.unlinkSync(STOP_FILE); } catch {}
-}
 
 interface CronState {
   startedAt: string;
@@ -28,31 +19,6 @@ interface CronState {
   totalErrors: number;
 }
 
-function acquireLock(): boolean {
-  try {
-    fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
-    if (fs.existsSync(LOCK_FILE)) {
-      const lock = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
-      // Check if the locking process is still alive
-      try {
-        process.kill(lock.pid, 0);
-        console.warn(`[cron] Pipeline already running (PID ${lock.pid}, started ${lock.startedAt}). Skipping.`);
-        return false;
-      } catch {
-        console.warn('[cron] Stale lock found — previous run exited without cleanup. Proceeding.');
-      }
-    }
-    fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
-    return true;
-  } catch (e: any) {
-    console.error(`[cron] Failed to acquire lock: ${e.message}`);
-    return false;
-  }
-}
-
-function releaseLock(): void {
-  try { fs.unlinkSync(LOCK_FILE); } catch {}
-}
 
 function loadCronState(): CronState {
   if (fs.existsSync(STATE_FILE)) {
@@ -85,7 +51,7 @@ async function reportStatus(success: boolean, productCount: number, errorCount: 
 }
 
 export async function runFullPipeline(): Promise<void> {
-  if (!acquireLock()) return;
+  if (!acquireLock('full')) return;
 
   const pipelineStart = Date.now();
   const state = loadCronState();
