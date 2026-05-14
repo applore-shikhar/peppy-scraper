@@ -1,10 +1,28 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import axios from 'axios';
 import { scrapeBulk, closeBrowser } from '../services/playwright.service';
 import { pushToDatabase } from './push-pipeline';
 import { BundledProduct } from '../parsers/types';
 import { SiteKey } from '../config/sites';
 import { acquireLock, releaseLock, shouldStop, clearStopSignal } from '../utils/stop-signal';
+
+async function reportStatus(success: boolean, productCount: number, errorCount: number, responseTimeMs: number, error?: string): Promise<void> {
+  const beUrl = process.env.PEPPY_BE_URL;
+  if (!beUrl) return;
+  try {
+    await axios.post(`${beUrl}/api/admin/scraper/status`, {
+      source: 'cron',
+      success,
+      responseTime: responseTimeMs,
+      productCount,
+      ...(error ? { error } : {}),
+    }, { timeout: 10000 });
+    console.log(`[demo] Status reported to peppy-be (success=${success}, products=${productCount})`);
+  } catch (e: any) {
+    console.warn(`[demo] Failed to report status: ${e.message}`);
+  }
+}
 
 const CHECKPOINT_DIR = path.join(process.cwd(), 'output', 'checkpoints');
 
@@ -38,6 +56,7 @@ export async function runDemoPipeline(): Promise<void> {
   if (!acquireLock('demo')) return;
 
   const start = Date.now();
+  let totalErrors = 0;
   console.log('\n[demo] ══════════════════════════════════════════════════');
   console.log(`[demo] Demo pipeline started at ${new Date().toISOString()}`);
   console.log(`[demo] ${DEMO_QUERIES.length} queries × ${DEMO_SITES.length} sites × ${DEMO_COUNT} products/site`);
@@ -68,7 +87,6 @@ export async function runDemoPipeline(): Promise<void> {
 
     const allBundles: BundledProduct[] = [];
     let totalRaw = 0;
-    let totalErrors = 0;
 
     for (let i = 0; i < DEMO_QUERIES.length; i++) {
       const q = DEMO_QUERIES[i];
@@ -108,8 +126,11 @@ export async function runDemoPipeline(): Promise<void> {
     console.log(`[demo] MongoDB: ${pushResult.mongoInserted} new, ${pushResult.mongoUpdated} updated`);
     console.log(`[demo] ChromaDB: ${pushResult.chromaVectors} vectors`);
     console.log('[demo] ══════════════════════════════════════════════════\n');
+
+    await reportStatus(true, pushResult.mongoInserted + pushResult.mongoUpdated, totalErrors, elapsed * 1000);
   } catch (e: any) {
     console.error(`[demo] Fatal error: ${e.message}`);
+    await reportStatus(false, 0, 0, Date.now() - start, e.message);
   } finally {
     await closeBrowser().catch(() => {});
     releaseLock();
